@@ -1,6 +1,7 @@
 from enum import IntEnum
 import random
 import socket
+import hashService
 
 class Protocols(IntEnum):
   NONE = 0
@@ -11,13 +12,14 @@ class UDPClient:
   END_MESSAGE = b"FIM"
   SEQ_SIZE = 5
   ACK_MESSAGE = b"ACK"
+  CHECKSUM_SIZE = 16
   
   def __init__(self, props):
     self.SERVER_IP = props["SERVER_IP"]
     self.SERVER_PORT = props["SERVER_PORT"]
     self.BUFFER_SIZE = props["BUFFER_SIZE"]
     self.PROTOCOL = props["PROTOCOL"]
-    self.ERROR_RATE = props["ERROR_RATE"] if "ERROR_RATE" in props else 0
+    self.ERROR_RATE_SEND_ACK = props["ERROR_RATE_SEND_ACK"] if "ERROR_RATE_SEND_ACK" in props else 0
     self.showLogs = props["SHOW_LOGS"] if "SHOW_LOGS" in props else True
     # Create a UDP socket at client side
     self.UDPClientSocket = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
@@ -45,14 +47,18 @@ class UDPClient:
     lastSeqReceived = None
     while hasFinished == False:
       [bytesReceived, address] = self.UDPClientSocket.recvfrom(self.BUFFER_SIZE)
-      seqReceived = bytesReceived[:self.SEQ_SIZE]
-      hasFinished = bytesReceived.endswith(self.END_MESSAGE)
-      dataReceived = bytesReceived[self.SEQ_SIZE:-len(self.END_MESSAGE)] if hasFinished else bytesReceived[self.SEQ_SIZE:]
-      
+      seqReceived, checksum, dataReceived, hasFinished = self.__extractPackage(bytesReceived)
       seqNumber = int(self.__bytesToString(seqReceived))
       self.__log(f"\nReceived from server SEQ {seqNumber}. Tam packages: {len(packages)}")
       
-      if seqNumber == len(packages) + 1:
+      if(not self.__checksum(checksum, dataReceived)):
+        self.__log(f"Checksum failed for package {seqReceived}")
+        # Ignore package
+        self.__log(f"Package {seqNumber} ignored")
+        # send ACK to server
+        self.__sendACK(lastSeqReceived, address)
+      elif seqNumber == len(packages) + 1:
+        self.__log(f"Package {seqNumber} received")
         packages.append(dataReceived)
         lastSeqReceived = seqReceived
         self.__sendACK(seqReceived, address)
@@ -69,25 +75,30 @@ class UDPClient:
     self.__log("\nProtocol: Bit Alternante")
     
     packages = []
-    
     hasFinished = False
+    lastSeqReceived = None
     while hasFinished == False:
       [bytesReceived, address] = self.UDPClientSocket.recvfrom(self.BUFFER_SIZE)
       
-      seqReceived = bytesReceived[:self.SEQ_SIZE]
-      hasFinished = bytesReceived.endswith(self.END_MESSAGE)
-      dataReceived = bytesReceived[self.SEQ_SIZE:-len(self.END_MESSAGE)] if hasFinished else bytesReceived[self.SEQ_SIZE:]
-      
+      seqReceived, checksum, dataReceived, hasFinished = self.__extractPackage(bytesReceived)
       seqNumber = int(self.__bytesToString(seqReceived))
       self.__log(f"\nReceived from server SEQ {seqNumber}")
       
-      if seqNumber == len(packages) + 1:
+      if(not self.__checksum(checksum, dataReceived)):
+        self.__log(f"Checksum failed for package {seqReceived}")
+        # Ignore package
+        self.__log(f"Package {seqNumber} ignored")
+        # send ACK to server
+        self.__sendACK(lastSeqReceived, address)
+      elif seqNumber == len(packages) + 1:
+        self.__log(f"Package {seqNumber} received")
         packages.append(dataReceived)
+        lastSeqReceived = seqReceived
         self.__sendACK(seqReceived, address)
       else:
         self.__log(f"Package {seqNumber} already received")
         # send ACK to server
-        self.__sendACK(seqReceived, address)
+        self.__sendACK(lastSeqReceived, address)
       
     binaryResponse = b"".join(packages)
     return binaryResponse # self.__bytesToString(binaryResponse)
@@ -108,13 +119,23 @@ class UDPClient:
       
     return binaryResponse # self.__bytesToString(binaryResponse)
   
+  def __extractPackage(self, bytesReceived):
+    hasFinished = bytesReceived.endswith(self.END_MESSAGE)
+    seqReceived = bytesReceived[:self.SEQ_SIZE]
+    checksum = bytesReceived[self.SEQ_SIZE:self.SEQ_SIZE + self.CHECKSUM_SIZE]
+    dataReceived = bytesReceived[self.SEQ_SIZE + self.CHECKSUM_SIZE:-len(self.END_MESSAGE)] if hasFinished else bytesReceived[self.SEQ_SIZE + self.CHECKSUM_SIZE:]
+    return (seqReceived, checksum, dataReceived, hasFinished)
+  
+  def __checksum(self, checksum, data):
+    return checksum == hashService.hashBinary(data)
+  
   def __sendACK(self, seqReceived, address):
-    if random.randint(1, 100) > self.ERROR_RATE:
+    if random.randint(1, 100) > self.ERROR_RATE_SEND_ACK:
       ack = self.ACK_MESSAGE + seqReceived
       self.UDPClientSocket.sendto(ack, address)
       self.__log(f"Sending ACK to server: {ack}")
     else:
-      self.__log(f"ACK {seqReceived} lost")
+      self.__log(f"[ERROR] ACK {seqReceived} lost")
     
   def __send(self, message):
      # Send to server using created UDP socket

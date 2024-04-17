@@ -1,6 +1,8 @@
 from enum import IntEnum
+import random
 import socket
 import time 
+import hashService
   
 class Protocols(IntEnum):
   NONE = 0
@@ -12,8 +14,9 @@ class UDPServer:
   routes = {}
   END_MESSAGE = b"FIM"
   SEQ_SIZE = 5
+  CHECKSUM_SIZE = 128
   ACK_MESSAGE = b"ACK"
-  TIMEOUT = .1
+  TIMEOUT = .05
   TIME_BETWEEN_PACKAGES = 0
   WINDOWN_SIZE = 4
   
@@ -23,6 +26,7 @@ class UDPServer:
     self.BUFFER_SIZE = props["BUFFER_SIZE"]
     self.PROTOCOL = props["PROTOCOL"]
     self.showLogs = props["SHOW_LOGS"] if "SHOW_LOGS" in props else True
+    self.ERROR_RATE_CHECKSUM = props["ERROR_RATE_CHECKSUM"] if "ERROR_RATE_CHECKSUM" in props else 0
     # Create a datagram socket
     self.UDPServerSocket = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
     
@@ -43,7 +47,7 @@ class UDPServer:
     
   def send(self, message, address):
     bytesMessage = self.__stringToBytes(message) + self.END_MESSAGE
-    dataSize = self.BUFFER_SIZE - self.SEQ_SIZE
+    dataSize = self.BUFFER_SIZE - self.SEQ_SIZE - self.CHECKSUM_SIZE
     packages = [bytesMessage[i:i + dataSize] for i in range(0, len(bytesMessage), dataSize)]
     
     if(self.PROTOCOL == Protocols.BIT_ALTERNANTE):
@@ -67,7 +71,7 @@ class UDPServer:
         package = packages[j]
         seq = j + 1
         self.__log(f"Sending package {seq} to client")
-        package = self.__stringToBytes(str(seq).zfill(self.SEQ_SIZE)) + package
+        package = self.__makePackage(seq, package)
         # Sending a reply to client
         self.UDPServerSocket.sendto(package, address)
         j += 1
@@ -87,11 +91,13 @@ class UDPServer:
             seqACKSReceived.append(seqReceived)
         except socket.timeout:
           self.__log(f"Timeout for ACK")
+        except Exception as e:
+          self.__log(f"Error: {e}")
       self.UDPServerSocket.settimeout(None)
       
       # Verifica quantos ACKs foram recebidos em sequencia e move a janela
       seqACKSReceived.sort()
-      greater = seqACKSReceived[-1] if len(seqACKSReceived) > 0 else 0
+      greater = seqACKSReceived[-1] if len(seqACKSReceived) > 0 else i
       # ACKSReceived = 0
       # for d, _ in enumerate(seqACKSReceived):
       #   last = i if d == 0 else seqACKSReceived[d - 1]
@@ -117,7 +123,7 @@ class UDPServer:
       package = packages[i]
       seq = i + 1
       self.__log(f"\nSending package {seq} to client")
-      package = self.__stringToBytes(str(seq).zfill(self.SEQ_SIZE)) + package
+      package = self.__makePackage(seq, package)
       # Sending a reply to client
       self.UDPServerSocket.sendto(package, address)
       
@@ -151,11 +157,27 @@ class UDPServer:
     for i, package in enumerate(packages):
       seq = i + 1
       self.__log(f"\nSending package {seq} to client")
-      package = self.__stringToBytes(str(seq).zfill(self.SEQ_SIZE)) + package
+      package = self.__makePackage(seq, package)
       # Sending a reply to client
       self.UDPServerSocket.sendto(package, address)
       if i < len(packages) - 1:
         time.sleep(.5)
+    
+  def __calcChecksum(self, data):
+    if random.randint(1, 100) > self.ERROR_RATE_CHECKSUM:
+      checksum = hashService.hashBinary(data)
+    else:
+      checksum = hashService.hashBinary(data + b"1")
+      self.__log(f"[ERROR] Checksum error for package")
+    return checksum
+  
+  def __makePackage(self, seq, payload):
+    seq = self.__stringToBytes(str(seq).zfill(self.SEQ_SIZE))
+    if payload.endswith(self.END_MESSAGE):
+      checksum = self.__calcChecksum(payload[:-len(self.END_MESSAGE)])
+    else:
+      checksum = self.__calcChecksum(payload)
+    return seq + checksum + payload
     
   def addRoute(self, routeName, callback):
     self.routes[routeName.upper()] = callback

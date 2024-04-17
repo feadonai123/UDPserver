@@ -31,9 +31,10 @@ def onBig(message, address):
 serverDriver = UDPService.UDPServer({
   "SERVER_IP": "127.0.0.1",
   "SERVER_PORT": 1234,
-  "BUFFER_SIZE": 1024,
+  "BUFFER_SIZE": 1500,
   "PROTOCOL": UDPService.Protocols.GO_BACK_N,
-  "SHOW_LOGS": True
+  "SHOW_LOGS": True,
+  "ERROR_RATE_CHECKSUM": 5
 })
 
 serverDriver.addRoute("TESTE", onTeste)
